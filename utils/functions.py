@@ -1,117 +1,116 @@
-import json
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.schema.messages import HumanMessage, SystemMessage
+from youtube_transcript_api import YouTubeTranscriptApi
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.chat_models import ChatOpenAI
+from langchain.vectorstores import Pinecone
+from langchain.chains import VectorDBQA
+from langchain.llms import OpenAI
+from langchain import VectorDBQA
+from dotenv import load_dotenv
+from utils.prompts import *
+from typing import Optional
+import moviepy.editor as mp
+import pinecone
+import whisper
 import os
 
-import requests
-from openai import OpenAI
-
-from prompts import assistant_instructions, spr_prompt
+load_dotenv()
 
 OPENAI_API_KEY = os.environ['OPENAI_API_KEY']
-AIRTABLE_API_KEY = os.environ['AIRTABLE_API_KEY']
+PINECONE_API_KEY = os.environ['PINECONE_API_KEY']
+PINECONE_ENV = "us-east4-gcp"
+embed_model = "text-embedding-ada-002"
 
-# Init OpenAI Client
-client = OpenAI(api_key=OPENAI_API_KEY)
-
-
-
-
-
+# Pinecone Setup
+pinecone.init(api_key = PINECONE_API_KEY, environment = PINECONE_ENV)
+index_name = 'kb-builder' # Set the index name in pinecone first
 
 
-# Create or load assistant
-def create_assistant(client):
-  assistant_file_path = 'assistant.json'
-
-  # If there is an assistant.json file already, then load that assistant
-  if os.path.exists(assistant_file_path):
-    with open(assistant_file_path, 'r') as file:
-      assistant_data = json.load(file)
-      assistant_id = assistant_data['assistant_id']
-      print("Loaded existing assistant ID.")
-  else:
-    # If no assistant.json is present, create a new assistant using the below specifications
-
-    # To change the knowledge document, modifiy the file name below to match your document
-    # If you want to add multiple files, paste this function into ChatGPT and ask for it to add support for multiple files
-    file = client.files.create(file=open("knowledge.txt", "rb"),
-                               purpose='assistants')
-
-    assistant = client.beta.assistants.create(
-        instructions=assistant_instructions,
-        model="gpt-4-1106-preview",
-        tools=[
-            {
-                "type": "retrieval"  # This adds the knowledge base as a tool
-            },
-            {
-                "type": "function",  # This adds the content summarization as a tool
-                "function": {
-                    "name": "transcribe_and_summarize",
-                    "description":
-                    "Transcribe the provided content (e.g. youtube link, article link, long text, etc)",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "content_link": {
-                                "type": "string",
-                                "description": "Link to the content for transcription or long text."
-                            }
-                        },
-                        "required": ["content_link"]
-                    }
-                }
-            },
-            {
-                "type": "function",  # This adds the knowledge base integration as a tool
-                "function": {
-                    "name": "add_to_knowledge_base",
-                    "description":
-                    "Integrate the summary into the user's personal knowledge base.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "summary": {
-                                "type": "string",
-                                "description": "The summary to be added to the knowledge base."
-                            }
-                        },
-                        "required": ["summary"]
-                    }
-                }
-            }
-        ],
-        file_ids=[file.id]
-    )
-
-    # Create a new assistant.json file to load on future runs
-    with open(assistant_file_path, 'w') as file:
-      json.dump({'assistant_id': assistant.id}, file)
-      print("Created a new assistant and saved the ID.")
-
-    assistant_id = assistant.id
-
-  return assistant_id
+llm = OpenAI(temperature=0, openai_api_key=OPENAI_API_KEY)
+chat = ChatOpenAI(model="gpt-4-1106-preview",temperature=0, openai_api_key=OPENAI_API_KEY)
 
 
-# Add lead to Airtable
-def create_lead(name, phone, address):
-  url = "https://api.airtable.com/v0/appM1yx0NobvowCAg/Leads"  # Change this to your Airtable API URL
-  headers = {
-      "Authorization": AIRTABLE_API_KEY,
-      "Content-Type": "application/json"
-  }
-  data = {
-      "records": [{
-          "fields": {
-              "Name": name,
-              "Phone": phone,
-              "Address": address
-          }
-      }]
-  }
-  response = requests.post(url, headers=headers, json=data)
-  if response.status_code == 200:
-    print("Lead created successfully.")
-    return response.json()
-  else:
-    print(f"Failed to create lead: {response.text}")
+text_splitter = RecursiveCharacterTextSplitter(
+    separators=["."], chunk_size=1000, chunk_overlap=25
+)
+
+embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
+summaries = []
+transcriber_model_sizes = ["tiny.en","base.en","small.en","medium","large-v3"]
+summary_lengths = {"Short": "5-10 WORD","Medium": "30-50 WORD","Long": "75-125 WORD"}
+
+def transcribe(content, content_type, model_size: Optional[str] = "tiny.en"):
+    global transcript
+    print(f"Content type is {content_type}")
+    if content_type == "Youtube":
+        video_id = content.replace('https://www.youtube.com/watch?v=', '')
+        result = YouTubeTranscriptApi.get_transcript(video_id)
+        transcript=''
+        for x in result:
+            sentence = x['text']
+            transcript += f' {sentence}\n'
+
+    elif content_type == "Article":
+        print("Article")
+        transcript="Article transcript goes here"
+
+    elif content_type == "Tweet":
+        print("Tweet")
+        transcript="Tweet transcript goes here"
+
+    elif content_type == "Video":
+        transcriber_model = whisper.load_model(transcriber_model_sizes[model_size])
+        # First we must convert the video to Audio
+        mp.VideoFileClip(content).audio.write_audiofile("data/Convertedaudio.wav")
+        output = transcriber_model.transcribe("data/Convertedaudio.wav")
+        transcript = output["text"].strip()
+
+    elif content_type == "Audio":
+        transcriber_model = whisper.load_model(transcriber_model_sizes[model_size])
+        # Extract the audio data from the tuple
+        audio_data = content[1] if isinstance(content, tuple) else content
+        mp.AudioFileClip(content).write_audiofile("data/audio.wav")
+        output = transcriber_model.transcribe(audio_data)
+        transcript = output["text"].strip()
+
+    else:
+        return f'Error, content type({content_type}) is not found!'
+
+    return transcript
+
+
+def add_to_knowledge_base(summary):
+    print("Adding summary to vector KB")
+    global texts
+    texts = text_splitter.create_documents([summary])
+
+    if index_name not in pinecone.list_indexes():
+        print("Index does not exist: ", index_name)
+
+    try:
+        db = Pinecone.from_texts([t.page_content for t in texts], embeddings, index_name = index_name)
+        global qa
+        qa = VectorDBQA.from_chain_type(llm=llm, chain_type="stuff", vectorstore=db)
+        return "Successfully Added to Vector DB!"
+    
+    except SystemError:
+        return "Error: Could not add summary to DB"
+
+def summarise():
+    messages = [
+        SystemMessage(content=spr_prompt),
+        HumanMessage(content=f"Here is a transcript, please summarise it: {transcript}"),
+    ]
+    
+    summary = chat.invoke(messages).content
+
+    return summary
+
+
+def question_answer(question: str):
+    try:
+        return qa.run(question)
+       
+    except NameError:
+        return "Error: Ensure summary has been added to db first!"
