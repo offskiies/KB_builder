@@ -1,4 +1,5 @@
 # Knowledge Base Builder
+Build your own custom knowledge base from various sources such as youtube videos transcripts, tweets, articles, videos and audios. Uses Gradio for the UI
 
 ## Initial set-up:
 1. Create `.env` file in root of directory to store huggingface and openai API keys.
