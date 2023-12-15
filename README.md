@@ -2,10 +2,10 @@
 Build your own custom knowledge base from various sources such as youtube videos transcripts, tweets, articles, videos and audios. Uses Gradio for the UI
 
 ## Initial set-up:
-1. Create `.env` file in root of directory to store huggingface and openai API keys.
+1. Create `.env` file in root of directory to store Pinecone and openai API keys.
 ```
 OPENAI_API_KEY='<YOUR OPENAI API KEY>'
-HUGGINGFACE_API_KEY='<YOUR HUGGINGFACE API KEY>'
+PINECONE_API_KEY='<YOUR PINECONE_API_KEY>'
 ```
 2. Install dependencies.
 ```shell
